@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TUZAKI</title>
+<style>
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:#0b0b10;color:#f2f2f5;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:20px;text-align:center}
+h1{margin:0;letter-spacing:.35em;font-size:1.1rem;color:#8b8b99}
+.pic{width:min(420px,86vw);aspect-ratio:1/1;border-radius:18px;overflow:hidden;background:#16161f;border:1px solid #2a2a38;display:flex;align-items:center;justify-content:center}
+.pic img{width:100%;height:100%;object-fit:cover;display:block}
+.ph{font-size:3.5rem;font-weight:800;color:#e5322d;letter-spacing:.1em}
+.stats{display:flex;gap:18px;color:#8b8b99;font-size:.95rem}
+.stats b{color:#f2f2f5;font-size:1.15rem}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#e5322d;margin-right:6px;animation:p 1.2s infinite}
+@keyframes p{50%{opacity:.25}}
+button{background:#e5322d;color:#fff;border:0;border-radius:12px;padding:14px 56px;font-size:1.1rem;font-weight:700;cursor:pointer}
+button:active{transform:scale(.97)}
+#msg{min-height:1.4em;font-weight:600}
+.busy{color:#ffb020}.ok{color:#2ecc71}
+#own{display:none;background:#16161f;border:1px solid #e5322d;border-radius:12px;padding:12px 16px;font-size:.9rem;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center}
+#own button{padding:8px 16px;font-size:.9rem;background:#333}
+#own #talk{background:#e5322d}
+#own #talk.on{background:#2ecc71}
+</style>
+</head>
+<body>
+<h1>TUZAKI</h1>
+<div class="pic">
+  <img id="img" alt="" src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRz-3eHcMnSYaQMi5B9-UWRxD_eFAB-bh9l495_DZGKhw&s=10">
+</div>
+<div class="stats">
+  <span><span class="dot"></span>Live ichida: <b id="live">0</b></span>
+  <span>Saytda: <b id="online">1</b></span>
+</div>
+<button id="go">Kirish</button>
+<div id="msg"></div>
+<div id="own">
+  <span>👑 Ega rejimi</span>
+  <button id="talk">🎤 Gapirish (D ni bosib turing)</button>
+  <button id="kick">Chiqarib yuborish</button>
+</div>
+
+<script>
+var $=function(i){return document.getElementById(i)};
+$('img').onerror=function(){this.parentNode.innerHTML='<div class="ph">TUZAKI</div>';};
+
+var ws, S={online:1,live:0,inside:false,owner:false,ownerTaken:false,needPw:false};
+var ac=null, nextT=0, rate=48000;           // eshitish
+var mic=null, talking=false, micCtx=null;   // gapirish
+
+function say(t,c){$('msg').textContent=t;$('msg').className=c||'';}
+function render(){
+  $('live').textContent=S.live; $('online').textContent=S.online;
+  $('go').textContent=S.inside?'Chiqish':'Kirish';
+  $('own').style.display=S.owner?'flex':'none';
+}
+function tx(o){ if(ws&&ws.readyState===1) ws.send(JSON.stringify(o)); }
+
+function connect(){
+  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host);
+  ws.binaryType='arraybuffer';
+  ws.onmessage=function(e){
+    if(typeof e.data!=='string'){ play(e.data); return; }
+    var m=JSON.parse(e.data);
+    if(m.type==='state'){ S=m; render(); }
+    else if(m.type==='join_result'){ say(m.ok?'Siz livedasiz!':'Joyband!', m.ok?'ok':'busy'); }
+    else if(m.type==='owner_result'){
+      if(m.ok){ say('Siz endi egasiz.','ok'); startMic(); } else say(m.reason,'busy');
+    }
+    else if(m.type==='kicked'){ say('Ega sizni chiqarib yubordi.','busy'); }
+    else if(m.type==='talk_start'){ rate=m.rate||48000; nextT=0; say('🎤 Ega gapirmoqda...','ok'); }
+    else if(m.type==='talk_stop'){ say(''); }
+  };
+  ws.onclose=function(){ setTimeout(connect,1500); };
+}
+connect(); render();
+
+// ---- Kirish / Chiqish ----
+$('go').onclick=function(){
+  if(!ac){ ac=new (window.AudioContext||window.webkitAudioContext)(); }
+  if(ac.state==='suspended') ac.resume();
+  if(S.inside){ tx({type:'leave'}); say('Siz chiqdingiz.'); }
+  else tx({type:'join'});
+};
+
+// ---- Ovozni eshitish (PCM) ----
+function play(buf){
+  if(!S.inside||!ac) return;
+  var i16=new Int16Array(buf), f=new Float32Array(i16.length);
+  for(var i=0;i<i16.length;i++) f[i]=i16[i]/32768;
+  var b=ac.createBuffer(1,f.length,rate); b.copyToChannel(f,0);
+  var s=ac.createBufferSource(); s.buffer=b; s.connect(ac.destination);
+  var t=Math.max(ac.currentTime+0.08,nextT); s.start(t); nextT=t+b.duration;
+}
+
+// ---- Ega: Ctrl+Shift+J ----
+document.addEventListener('keydown',function(e){
+  if(e.ctrlKey&&e.shiftKey&&(e.key==='J'||e.key==='j')){
+    e.preventDefault();
+    if(S.owner){ stopTalk(); tx({type:'release_owner'}); say('Ega rejimi o\u2018chirildi.'); return; }
+    var pw=''; if(S.needPw){ pw=prompt('Ega paroli:')||''; }
+    tx({type:'claim_owner',pw:pw});
+    return;
+  }
+  if((e.key==='d'||e.key==='D')&&!e.repeat&&!e.ctrlKey&&!e.metaKey&&S.owner) startTalk();
+});
+document.addEventListener('keyup',function(e){
+  if(e.key==='d'||e.key==='D') stopTalk();
+});
+var tb=$('talk');
+tb.addEventListener('mousedown',startTalk); tb.addEventListener('mouseup',stopTalk); tb.addEventListener('mouseleave',stopTalk);
+tb.addEventListener('touchstart',function(e){e.preventDefault();startTalk();});
+tb.addEventListener('touchend',stopTalk);
+$('kick').onclick=function(){ tx({type:'kick'}); };
+
+// ---- Mikrofon (PCM yuborish) ----
+function startMic(){
+  if(mic) return;
+  navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}}).then(function(st){
+    mic=st;
+    micCtx=new (window.AudioContext||window.webkitAudioContext)();
+    var src=micCtx.createMediaStreamSource(st);
+    var pr=micCtx.createScriptProcessor(2048,1,1);
+    pr.onaudioprocess=function(e){
+      if(!talking||!ws||ws.readyState!==1) return;
+      var f=e.inputBuffer.getChannelData(0), o=new Int16Array(f.length);
+      for(var i=0;i<f.length;i++){ var v=Math.max(-1,Math.min(1,f[i])); o[i]=v<0?v*32768:v*32767; }
+      ws.send(o.buffer);
+    };
+    src.connect(pr); pr.connect(micCtx.destination);
+  }).catch(function(){ say('Mikrofonga ruxsat berilmadi.','busy'); });
+}
+function startTalk(){
+  if(!S.owner||talking) return;
+  if(!mic){ startMic(); return; }
+  if(micCtx.state==='suspended') micCtx.resume();
+  talking=true; tb.classList.add('on');
+  tx({type:'talk_start',rate:micCtx.sampleRate});
+}
+function stopTalk(){
+  if(!talking) return;
+  talking=false; tb.classList.remove('on');
+  tx({type:'talk_stop'});
+}
+</script>
+</body>
+</html>
